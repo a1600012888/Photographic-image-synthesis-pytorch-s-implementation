@@ -10,21 +10,22 @@ from my_snip.clock import TrainClock, AvgMeter, TorchCheckpoint
 from pvgg import vgg19
 import time
 from tqdm import tqdm
-from tensorboardX import SummaryWriter
+#from tensorboardX import SummaryWriter
+from my_snip.tensorboard import TensorBoard as SummaryWriter   #Using my wrapper funciton
 import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('prefix', type = str)
 parser.add_argument('--resume',default = None, type = str, help = 'the model to load')
 parser.add_argument('--record_step', default=50, type = int, help = 'record loss, etc per ?')
-
+parser.add_argument('--start_epoch', default = 0, type = int, help = 'start to train in epoch?')
 args = parser.parse_args()
 record_step = args.record_step
-epoch_num = 80
-learning_rate_policy = [[10, 1],
-                        [20, 0.1],
-                        [20, 0.01],
-                        [20, 0.002]
+epoch_num = 200
+learning_rate_policy = [[30, 1e-3],
+                        [50, 1e-4],
+                        [30, 1e-5],
+                        [30, 3e-6]
                         ]
 get_learing_rate = MultiStageLearningRatePolicy(learning_rate_policy)
 
@@ -71,15 +72,15 @@ net.cuda()
 ## init ??
 
 
-optimizer = torch.optim.SGD(net.parameters(), lr = 0.01, momentum=0.9, weight_decay=1e-4)
-
+#optimizer = torch.optim.SGD(net.parameters(), lr = 0.001, momentum=0.9, weight_decay=3e-4)
+optimizer = torch.optim.Adam(net.parameters(), lr = 0.001)
 vgg_perceptual_loss = vgg19(pretrained = True)
 
 vgg_perceptual_loss.cuda()
 vgg_perceptual_loss.eval()
 
 clock = TrainClock()
-
+clock.epoch = args.start_epoch
 epoch_loss = AvgMeter('loss')
 data_time_m = AvgMeter('data time')
 batch_time_m = AvgMeter('train time')
@@ -92,7 +93,7 @@ for e_ in range(epoch_num):
     batch_time_m.reset()
 
     clock.tock()
-    adjust_learning_rate(optimizer, e_)
+    adjust_learning_rate(optimizer, clock.epoch)
 
     epoch_time = time.time()
 
@@ -129,13 +130,16 @@ for e_ in range(epoch_num):
         batch_time_m.update(time.time() - start_time)
 
         start_time = time.time()
+
+        img.detach_()
+        out.detach_()
         if clock.minibatch % record_step == 0:
             writer.add_scalar('Train/loss', loss.item(), clock.step // record_step)
-            writer.add_image('Train/Raw_img', img[0], clock.step // record_step)
-            writer.add_image('Train/output', out[0], clock.step // record_step)
+            writer.add_image('Train/Raw_img', [img.cpu().numpy()[0]], clock.step // record_step)
+            writer.add_image('Train/output', [out.cpu().numpy()[0]], clock.step // record_step)
         if clock.minibatch % 500 == 0:
 
-
+            print(' ')
             print('epoch-{}, step-{}'.format(clock.epoch, clock.minibatch))
 
             print('Loss: {}'.format(epoch_loss.mean))

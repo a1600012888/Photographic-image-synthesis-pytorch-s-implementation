@@ -80,8 +80,9 @@ class VGG(nn.Module):
         f_img = (img.permute(0, 2, 3, 1) - mean) / std
         f_img = f_img.permute(0, 3, 1, 2)
 
-        perceptual = []
+        perceptual = torch.zeros([1, 5], dtype = torch.float).cuda()
 
+        i = 0
         for name, m in self.named_modules():
             if name in ['', 'features', 'classifier']:
                 continue
@@ -89,14 +90,21 @@ class VGG(nn.Module):
                 continue
             #print(name)
             f_out = m(f_out)
-            f_img = m(f_img)
+            f_img = m(f_img).detach()
+
+
 
             if name in self.perceptual_dict.keys():
-                perceptual.append(((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1))
+                perceptual[0][i] = ((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1)
+                #perceptual.append(((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1)# )
+            f_out.detach_()
 
         loss = torch.tensor(0, dtype = torch.float).cuda()
+        '''
         for pe in perceptual:
             loss += pe
+        '''
+        loss = torch.mean(perceptual)
         return loss.unsqueeze(0)#torch.tensor(perceptual, dtype = torch.float)
 
         '''

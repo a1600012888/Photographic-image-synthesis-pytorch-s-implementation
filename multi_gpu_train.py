@@ -10,7 +10,8 @@ from my_snip.clock import TrainClock, AvgMeter, TorchCheckpoint
 from pvgg import vgg19
 import time
 from tqdm import tqdm
-from tensorboardX import SummaryWriter
+#from tensorboardX import SummaryWriter
+from my_snip.tensorboard import TensorBoard as SummaryWriter   #Using my wrapper funciton
 import argparse
 from encoding.parallel import ModelDataParallel, CriterionDataParallel
 from torch.nn import DataParallel
@@ -22,11 +23,11 @@ parser.add_argument('--record_step', default=50, type = int, help = 'record loss
 args = parser.parse_args()
 
 record_step = args.record_step
-epoch_num = 80
-learning_rate_policy = [[10, 0.1],
-                        [20, 0.01],
-                        [20, 0.001],
-                        [20, 0.0002]
+epoch_num = 180
+learning_rate_policy = [[30, 1e-3],
+                        [40, 1e-4],
+                        [50, 1e-5],
+                        [50, 3e-6]
                         ]
 get_learing_rate = MultiStageLearningRatePolicy(learning_rate_policy)
 
@@ -47,7 +48,7 @@ ds_val = TorchDataset('val', 256)
 batch_size = 4
 step_per_epoch = ds_train.instance_per_epoch / batch_size
 
-dl_train = DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=batch_size * 4)
+dl_train = DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=batch_size * 6)
 dl_val = DataLoader(ds_val, batch_size=1, shuffle=True, num_workers=12)
 print('Dataloader ready!')
 
@@ -69,15 +70,15 @@ if args.resume != None:
     net.load_state_dict(torch.load(args.resume))
     print('Model loaded from {}'.format(args.resume))
 
-net.cuda(gpu_ids[0])
-net = DataParallel(net, gpu_ids, output_device = gpu_ids[1])
+net.cuda()
+net = DataParallel(net, gpu_ids)#, output_device = gpu_ids[1])
 
-optimizer = torch.optim.SGD(net.parameters(), lr = 0.01, momentum=0.9, weight_decay=1e-4)
-
+#optimizer = torch.optim.SGD(net.parameters(), lr = 1e-3, momentum=0.9, weight_decay=1e-4)
+optimizer = torch.optim.Adam(net.parameters(), lr = 0.001)
 vgg_perceptual_loss = vgg19(pretrained = True)
 vgg_perceptual_loss.cuda()
 vgg_perceptual_loss.eval()
-vgg_perceptual_loss = DataParallel(vgg_perceptual_loss, gpu_ids, gpu_ids[-1])
+vgg_perceptual_loss = DataParallel(vgg_perceptual_loss, gpu_ids)#, gpu_ids[-1])
 
 clock = TrainClock()
 
@@ -93,7 +94,7 @@ for e_ in range(epoch_num):
     batch_time_m.reset()
 
     clock.tock()
-    adjust_learning_rate(optimizer, e_)
+    adjust_learning_rate(optimizer, clock.epoch)
 
     epoch_time = time.time()
 
@@ -103,7 +104,7 @@ for e_ in range(epoch_num):
         clock.tick()
 
         inp = mn_batch['label'].cuda()
-        img = mn_batch['data'].cuda()
+        img = mn_batch['data'].cuda(gpu_ids[-1])
 
         '''
         testing
@@ -114,12 +115,12 @@ for e_ in range(epoch_num):
 
         optimizer.zero_grad()
         out = net(inp)
-        print(out.type())
+        #print(out.type())
 
         #vgg_perceptual_loss(out, img)
         loss = vgg_perceptual_loss(out, img)
 
-        print(loss, loss.type())
+        #print(loss, loss.type())
         loss = loss.mean()
 
 
@@ -130,11 +131,12 @@ for e_ in range(epoch_num):
         batch_time_m.update(time.time() - start_time)
 
         start_time = time.time()
+        img.detach_()
+        out.detach_()
         if clock.minibatch % record_step == 0:
-            writer.add_scalar('Train/loss', loss.item, clock.step // record_step)
-            writer.add_image('Train/Raw_img', img[0], clock.step // record_step)
-            writer.add_image('Train/output', out[0], clock.step // record_step)
-            writer.add_image('Train/Seg_img', inp[0], clock.step // record_step)
+            writer.add_scalar('Train/loss', loss.item(), clock.step // record_step)
+            writer.add_image('Train/Raw_img', [img.cpu().numpy()[0]], clock.step // record_step)
+            writer.add_image('Train/output', [out.cpu().numpy()[0]], clock.step // record_step)
         if clock.minibatch % 500 == 0:
 
 
