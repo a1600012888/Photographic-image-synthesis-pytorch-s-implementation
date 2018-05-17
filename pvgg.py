@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 import math
 import torch
+import torch.nn.functional as F
 '''
 Mainly copied from https://github.com/pytorch/vision/blob/master/torchvision/models/vgg.py
 Slightly modified to calculate perceptual loss.(Modified the implementation of VGG class)
@@ -61,7 +62,7 @@ class VGG(nn.Module):
         if init_weights:
             self._initialize_weights()
 
-    def forward(self, output, img):
+    def forward(self, output, img, label):
 
         '''
         # modifiled for vgg19 to cal perceptual loss;
@@ -80,7 +81,7 @@ class VGG(nn.Module):
         f_img = (img.permute(0, 2, 3, 1) - mean) / std
         f_img = f_img.permute(0, 3, 1, 2)
 
-        perceptual = torch.zeros([1, 5], dtype = torch.float).cuda()
+        perceptual = torch.zeros([1, 5, output.size(0), label.size(1)], dtype = torch.float).cuda()
 
         i = 0
         for name, m in self.named_modules():
@@ -95,7 +96,21 @@ class VGG(nn.Module):
 
 
             if name in self.perceptual_dict.keys():
-                perceptual[0][i] = ((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1)
+
+                resolution = f_out.size(2)
+                x_grid = torch.linspace(-1, 1, 2 * resolution).repeat(resolution, 1)
+                y_grid = torch.linspace(-1, 1, resolution).view(-1, 1).repeat(
+                    1, resolution * 2)
+                grid = torch.cat((x_grid.unsqueeze(2), y_grid.unsqueeze(2)), 2)
+                grid = grid.unsqueeze_(0)
+                grid = grid.repeat(label.size(0), 1, 1, 1).cuda()
+                label_downsampled = F.grid_sample(label, grid)
+
+                pe = ((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1, dim = 1, keepdim = True)
+                pe = pe * label_downsampled
+                perceptual[0][i] = torch.mean(torch.mean(pe, dim = 2), dim = 2)
+
+                i += 1
                 #perceptual.append(((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1)# )
             f_out.detach_()
 
@@ -104,7 +119,11 @@ class VGG(nn.Module):
         for pe in perceptual:
             loss += pe
         '''
-        loss = torch.mean(perceptual)
+        perceptual = perceptual.sum(dim = 1)
+
+        loss = torch.sum(perceptual.min(dim = 1)[0]) * 0.999 + torch.sum(perceptual.mean(dim = 1)) * 0.001
+
+        #print(loss.size())
         return loss.unsqueeze(0)#torch.tensor(perceptual, dtype = torch.float)
 
         '''

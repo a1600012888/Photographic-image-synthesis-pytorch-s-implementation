@@ -17,7 +17,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('prefix', type = str)
 parser.add_argument('--resume',default = None, type = str, help = 'the model to load')
-parser.add_argument('--record_step', default=50, type = int, help = 'record loss, etc per ?')
+parser.add_argument('--record_step', default=200, type = int, help = 'record loss, etc per ?')
 parser.add_argument('--start_epoch', default = 0, type = int, help = 'start to train in epoch?')
 args = parser.parse_args()
 record_step = args.record_step
@@ -85,9 +85,9 @@ epoch_loss = AvgMeter('loss')
 data_time_m = AvgMeter('data time')
 batch_time_m = AvgMeter('train time')
 
-net.train()
 for e_ in range(epoch_num):
 
+    net.train()
     epoch_loss.reset()
     data_time_m.reset()
     batch_time_m.reset()
@@ -98,6 +98,7 @@ for e_ in range(epoch_num):
     epoch_time = time.time()
 
     start_time = time.time()
+
     for i, mn_batch in tqdm(enumerate(dl_train)):
 
         clock.tick()
@@ -118,7 +119,7 @@ for e_ in range(epoch_num):
         optimizer.zero_grad()
         out = net(inp)
 
-        loss = vgg_perceptual_loss(out, img)
+        loss = vgg_perceptual_loss(out, img, inp)
 
         loss = loss.mean()
         epoch_loss.update(loss.item())
@@ -133,13 +134,13 @@ for e_ in range(epoch_num):
 
         img.detach_()
         out.detach_()
+        inp.detach_()
         if clock.minibatch % record_step == 0:
             writer.add_scalar('Train/loss', loss.item(), clock.step // record_step)
             writer.add_image('Train/Raw_img', [img.cpu().numpy()[0]], clock.step // record_step)
             writer.add_image('Train/output', [out.cpu().numpy()[0]], clock.step // record_step)
         if clock.minibatch % 500 == 0:
 
-            print(' ')
             print('epoch-{}, step-{}'.format(clock.epoch, clock.minibatch))
 
             print('Loss: {}'.format(epoch_loss.mean))
@@ -148,10 +149,40 @@ for e_ in range(epoch_num):
 
             print('This epoch has lasted {:.3f} mins, expect {:.3f} mins to run'.format((start_time - epoch_time)/60,
                                                                                 (batch_time_m.mean * (step_per_epoch - clock.minibatch) / 60)))
-
+    writer.add_scalar('Train/Epoch_loss', epoch_loss.mean, clock.epoch)
     make_checkpoint(net.state_dict(), epoch_loss.mean, clock.epoch)
 
+    optimizer.zero_grad()
 
+    net.eval()
+    epoch_loss.reset()
+
+    print('Validation begin')
+    val_time = time.time()
+    for i, mn_batch in tqdm(enumerate(dl_val)):
+
+        inp = mn_batch['label']
+        img = mn_batch['data']
+
+        inp = inp.cuda()
+        img = img.cuda()
+        out = net(inp)
+
+        loss = vgg_perceptual_loss(out, img, inp)
+        loss = loss.mean()
+        epoch_loss.update(loss.item())
+
+        img.detach_()
+        out.detach_()
+        inp.detach_()
+        if i % 10 == 0:
+            writer.add_image('Val/Raw_img', [img.cpu().numpy()[0]])
+            writer.add_image('Val/output', [out.cpu().numpy()[0]])
+
+    writer.add_scalar('Val/Epoch_loss', epoch_loss.mean, clock.epoch)
+
+    print('Validation finished.   Lasting {:.2f} mins'.format((time.time() - val_time) / 60))
+    print('Validation loss: {:.3f}'.format(epoch_loss.mean))
 
 
 writer.close()

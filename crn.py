@@ -18,7 +18,7 @@ def get_output_chn(super_resolution):
     return chn
 class CRN(nn.Module):
 
-    def __init__(self, super_resolution = 512):
+    def __init__(self, super_resolution = 512, groups = 9):
         '''
 
         :param super_resolution: the height(short edge) of output image
@@ -30,6 +30,13 @@ class CRN(nn.Module):
         last_inp_chn = get_output_chn(super_resolution)
 
         resolutions = [4, 8, 16, 32, 64, 128, 256, 512, 1024]
+        return_labels = [True, True, True, True, True, False, False]
+
+        if super_resolution >= 512:
+            return_labels.append(False)
+        if super_resolution == 1024:
+            return_labels.append(False)
+        return_labels = return_labels[::-1]
 
         self.refine_block0 = refine_block(resolutions[0])
         self.refine_block1 = refine_block(resolutions[1])
@@ -45,7 +52,7 @@ class CRN(nn.Module):
         if super_resolution > 512:
             self.refine_block8 = refine_block(resolutions[8])
 
-        self.last_conv = nn.Conv2d(last_inp_chn, 3, kernel_size=1)
+        self.last_conv = nn.Conv2d(last_inp_chn, 3 * groups, kernel_size=1)
 
         self.kaiming_init_params()
 
@@ -69,6 +76,10 @@ class CRN(nn.Module):
         x = self.last_conv(x)
 
         x = (x + 1.0) / 2.0 * 255.0
+
+        a = x.split(3, dim = 1)
+
+        x = torch.cat(a, dim = 0)
 
         return x
 
@@ -98,7 +109,7 @@ class refine_block(nn.Module):
 
 
         out_chn = get_output_chn(super_resolution)
-        in_chn = 4 if super_resolution == 4 else get_output_chn(super_resolution // 2) + 4
+        in_chn = 19 if super_resolution == 4 else get_output_chn(super_resolution // 2) + 19
 
 
         self.conv1 = nn.Conv2d(in_chn, out_chn, kernel_size = 3, stride = 1, padding = 1)
@@ -119,9 +130,8 @@ class refine_block(nn.Module):
         #print('interpolation details: grid:{}, label:{}'.format(grid.size(), label.size()))
         #print('type: grid:{}, label:{}'.format(grid.type(), label.type()))
         grid = self.grid.repeat(label.size(0), 1, 1, 1).cuda()
-
+        #print('Label size {}'.format(label.size()))
         label_downsampled = F.grid_sample(label, grid)
-
 
         if self.super_resolution != 4:
             x = F.upsample_bilinear(x, size=(self.super_resolution, self.super_resolution * 2))
@@ -129,6 +139,7 @@ class refine_block(nn.Module):
         else:
             x = label_downsampled
 
+        #print('Label size {}'.format(x.size()))
         x = self.conv1(x)
         x = self.ln1(x)
         x = F.leaky_relu(x, 0.2)
@@ -145,7 +156,7 @@ def test(batch_size = 1, resolution = 512):
     net = CRN(resolution)
     net.cuda()
 
-    label = torch.randn([batch_size, 4, 1024, 2048], dtype = torch.float).cuda()
+    label = torch.randn([batch_size, 19, 1024, 2048], dtype = torch.float).cuda()
 
     out = net(label)
 

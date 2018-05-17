@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-from dataset import TorchDataset
-from crn import CRN
+from dataset2 import TorchDataset
+from crn2 import CRN
 import os
 from my_snip.config import MultiStageLearningRatePolicy
 from my_snip.clock import TrainClock, AvgMeter, TorchCheckpoint
-from pvgg import vgg19
+from pvgg2 import vgg19
 import time
 from tqdm import tqdm
 #from tensorboardX import SummaryWriter
@@ -18,20 +18,24 @@ from torch.nn import DataParallel
 parser = argparse.ArgumentParser()
 parser.add_argument('prefix', type = str)
 parser.add_argument('--resume',default = None, type = str, help = 'the model to load')
-parser.add_argument('--record_step', default=50, type = int, help = 'record loss, etc per ?')
+parser.add_argument('--record_step', default=200, type = int, help = 'record loss, etc per ?')
 
+parser.add_argument('--start_epoch', default = 0, type = int, help = 'start to train in epoch?')
 args = parser.parse_args()
 
 record_step = args.record_step
-epoch_num = 180
+epoch_num = 200
 learning_rate_policy = [[30, 1e-3],
-                        [40, 1e-4],
-                        [50, 1e-5],
-                        [50, 3e-6]
+                        [70, 1e-4],
+                        [20, 3e-5],
+                        [30, 1e-5],
+                        [20, 5e-6],
+                        [20, 3e-6],
+                        [10, 1e-6]
                         ]
 get_learing_rate = MultiStageLearningRatePolicy(learning_rate_policy)
-
-gpu_ids = [0, 1, 2, 3]
+gpu_num = torch.cuda.device_count()
+gpu_ids = list(range(gpu_num))
 
 
 def adjust_learning_rate(optimzier, epoch):
@@ -45,7 +49,7 @@ def adjust_learning_rate(optimzier, epoch):
 ds_train = TorchDataset('train', 256)
 ds_val = TorchDataset('val', 256)
 
-batch_size = 4
+batch_size = len(gpu_ids)
 step_per_epoch = ds_train.instance_per_epoch / batch_size
 
 dl_train = DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=batch_size * 6)
@@ -82,6 +86,7 @@ vgg_perceptual_loss = DataParallel(vgg_perceptual_loss, gpu_ids)#, gpu_ids[-1])
 
 clock = TrainClock()
 
+clock.epoch = args.start_epoch
 epoch_loss = AvgMeter('loss')
 data_time_m = AvgMeter('data time')
 batch_time_m = AvgMeter('train time')
@@ -118,7 +123,7 @@ for e_ in range(epoch_num):
         #print(out.type())
 
         #vgg_perceptual_loss(out, img)
-        loss = vgg_perceptual_loss(out, img)
+        loss = vgg_perceptual_loss(out, img, inp)
 
         #print(loss, loss.type())
         loss = loss.mean()
@@ -133,6 +138,7 @@ for e_ in range(epoch_num):
         start_time = time.time()
         img.detach_()
         out.detach_()
+        inp.detach_()
         if clock.minibatch % record_step == 0:
             writer.add_scalar('Train/loss', loss.item(), clock.step // record_step)
             writer.add_image('Train/Raw_img', [img.cpu().numpy()[0]], clock.step // record_step)
@@ -148,8 +154,41 @@ for e_ in range(epoch_num):
 
             print('This epoch has lasted {:.3f} mins, expect {:.3f} mins to run'.format((start_time - epoch_time)/60,
                                                                                 (batch_time_m.mean * (step_per_epoch - clock.minibatch) / 60)))
-
+    writer.add_scalar('Train/Epoch_loss', epoch_loss.mean, clock.epoch)
     make_checkpoint(net.module.state_dict(), epoch_loss.mean, clock.epoch)
+
+
+    optimizer.zero_grad()
+
+    net.eval()
+    epoch_loss.reset()
+
+    print('Validation begin')
+    val_time = time.time()
+    for i, mn_batch in tqdm(enumerate(dl_val)):
+
+        inp = mn_batch['label']
+        img = mn_batch['data']
+
+        inp = inp.cuda()
+        img = img.cuda()
+        out = net(inp)
+
+        loss = vgg_perceptual_loss(out, img, inp)
+        loss = loss.mean()
+        epoch_loss.update(loss.item())
+
+        img.detach_()
+        out.detach_()
+        inp.detach_()
+        if i % 10 == 0:
+            writer.add_image('Val/Raw_img', [img.cpu().numpy()[0]])
+            writer.add_image('Val/output', [out.cpu().numpy()[0]])
+
+    writer.add_scalar('Val/Epoch_loss', epoch_loss.mean, clock.epoch)
+
+    print('Validation finished.   Lasting {:.2f} mins'.format((time.time() - val_time) / 60))
+    print('Validation loss: {:.3f}'.format(epoch_loss.mean))
 
 
 

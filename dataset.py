@@ -11,6 +11,9 @@ import torch
 import scipy.misc as misc
 import torch.nn.functional as F
 
+from os.path import dirname, exists, join, splitext
+
+import json,scipy
 
 class TorchDataset(Dataset):
 
@@ -37,7 +40,7 @@ class TorchDataset(Dataset):
 
             for id in new_ids:
                 self.id2label[id] = os.path.join(full_dir, id)
-                self.id2img[id] = os.path.join(self.img_path, dir, (id[:-20] + 'leftImg8bit.png'))
+                self.id2img[id] = os.path.join(self.img_path, dir, (id[:-16] + 'leftImg8bit.png'))
 
             self.ids = self.ids + new_ids
 
@@ -63,7 +66,7 @@ class TorchDataset(Dataset):
 
         assert sample['data'].ndim == 3 and sample['label'].ndim == 3, 'shape!!'
 
-        assert sample['label'].shape[-1] == 4, 'label shape wrong!!'
+        #assert sample['label'].shape[-1] == 4, 'label shape wrong!!'
 
         #resize img：
         sample['data'] = misc.imresize(sample['data'], (self.super_resolution, self.super_resolution * 2))
@@ -98,14 +101,36 @@ class TorchDataset(Dataset):
             print(label.shape, np.array(img).shape)
             '''
     def read_label_img(self, id):
-        label = read_label(self.id2label[id])
-
-        label = np.asarray(label)
+        label = get_semantic_map(self.id2label[id])
+        # label of shape [x, y, 19]
+        label = np.asarray(label).squeeze(axis=0)#.transpose((2, 0, 1))
 
         img = np.array(io.imread(self.id2img[id]))
 
         return label, img
 
+class Dataset(object):
+    '''
+    code copied from https://github.com/CQFIO/PhotographicImageSynthesis/blob/master/helper.py
+    '''
+    def __init__(self, dataset_name):
+        self.work_dir = dirname(os.path.realpath('__file__'))
+        info_path = join(self.work_dir, 'datasets', dataset_name + '.json')
+        with open(info_path, 'r') as fp:
+            info = json.load(fp)
+        self.palette = np.array(info['palette'], dtype=np.uint8)
+
+
+def get_semantic_map(path):
+    '''
+    code copied from https://github.com/CQFIO/PhotographicImageSynthesis/blob/master/helper.py
+    '''
+    dataset=Dataset('cityscapes')
+    semantic=misc.imread(path)
+    tmp=np.zeros((semantic.shape[0],semantic.shape[1],dataset.palette.shape[0]),dtype=np.float32)
+    for k in range(dataset.palette.shape[0]):
+        tmp[:,:,k]=np.float32((semantic[:,:,0]==dataset.palette[k,0])&(semantic[:,:,1]==dataset.palette[k,1])&(semantic[:,:,2]==dataset.palette[k,2]))
+    return tmp.reshape((1,)+tmp.shape)
 
 '''
 def read_label(json_path):
@@ -130,7 +155,7 @@ def get_all_json(dir_path = '/home/zhangtianyuan/sfzhang/gtFine_trainvaltest/gtF
     os.path.isdir(dir_path)
     files = os.listdir(dir_path)
 
-    json_files = [i for i in files if i.endswith('json') and not i.startswith('.')]
+    json_files = [i for i in files if i.endswith('color.png') and not i.startswith('.')]
 
     #a = np.random.randint(0, len(json_files))
     #print(json_files[a])
