@@ -18,7 +18,7 @@ def get_output_chn(super_resolution):
     return chn
 class CRN(nn.Module):
 
-    def __init__(self, super_resolution = 512, groups = 9):
+    def __init__(self, super_resolution = 256, groups = 6):
         '''
 
         :param super_resolution: the height(short edge) of output image
@@ -109,7 +109,7 @@ class refine_block(nn.Module):
 
 
         out_chn = get_output_chn(super_resolution)
-        in_chn = 19 if super_resolution == 4 else get_output_chn(super_resolution // 2) + 19
+        in_chn = 20 if super_resolution == 4 else get_output_chn(super_resolution // 2) + 20
 
 
         self.conv1 = nn.Conv2d(in_chn, out_chn, kernel_size = 3, stride = 1, padding = 1)
@@ -134,7 +134,8 @@ class refine_block(nn.Module):
         label_downsampled = F.grid_sample(label, grid)
 
         if self.super_resolution != 4:
-            x = F.upsample_bilinear(x, size=(self.super_resolution, self.super_resolution * 2))
+            x = F.upsample(x, size=(self.super_resolution, self.super_resolution * 2),
+                           mode = 'bilinear', align_corners = True)
             x = torch.cat((x, label_downsampled), 1)
         else:
             x = label_downsampled
@@ -148,6 +149,8 @@ class refine_block(nn.Module):
         x = self.ln2(x)
         x = F.leaky_relu(x, 0.2)
 
+        del label_downsampled
+        del grid
         return x
 
 

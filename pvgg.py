@@ -42,14 +42,16 @@ class VGG(nn.Module):
         self.mean = torch.tensor([[0.485, 0.456, 0.406]], dtype = torch.float)
         self.std = torch.tensor([[0.229, 0.224, 0.225]], dtype = torch.float)
         self.perceptual_dict = {
-            'features.2': 224*224*64,
-            'features.7': 112*112*128,
-            'features.12': 56*56*256,
-            'features.21': 28*28*512,
-            'features.30': 14*14*512
+            'inp': 256 * 256 * 3,
+            'features.2': 256*512*64,
+            'features.7': 128*256*128,
+            'features.12': 64*128*256,
+            'features.21': 32*64*512,
+            'features.30': 16*32*512
         }
 
         self.features = features
+        '''
         self.classifier = nn.Sequential(
             nn.Linear(512 * 7 * 7, 4096),
             nn.ReLU(True),
@@ -59,6 +61,7 @@ class VGG(nn.Module):
             nn.Dropout(),
             nn.Linear(4096, num_classes),
         )
+        '''
         if init_weights:
             self._initialize_weights()
 
@@ -75,15 +78,24 @@ class VGG(nn.Module):
         mean = self.mean.cuda()
         std = self.std.cuda()
 
+
         f_out = (output.permute(0, 2, 3, 1)/255.0 - mean) / std
         f_out = f_out.permute(0, 3, 1, 2)/255.0
 
         f_img = (img.permute(0, 2, 3, 1) - mean) / std
         f_img = f_img.permute(0, 3, 1, 2)
 
-        perceptual = torch.zeros([1, 5, output.size(0), label.size(1)], dtype = torch.float).cuda()
 
-        i = 0
+        perceptual = torch.zeros([1, 6, output.size(0), label.size(1)], dtype = torch.float).cuda()
+
+        pe = torch.abs((f_img - f_out)).mean(dim=1, keepdim=True)
+        pe = pe * label
+        perceptual[0][0] = torch.mean(torch.mean(pe, dim=2), dim=2)
+
+        del pe
+        del img
+
+        i = 1
         for name, m in self.named_modules():
             if name in ['', 'features', 'classifier']:
                 continue
@@ -91,9 +103,7 @@ class VGG(nn.Module):
                 continue
             #print(name)
             f_out = m(f_out)
-            f_img = m(f_img).detach()
-
-
+            f_img = m(f_img)
 
             if name in self.perceptual_dict.keys():
 
@@ -105,26 +115,37 @@ class VGG(nn.Module):
                 grid = grid.unsqueeze_(0)
                 grid = grid.repeat(label.size(0), 1, 1, 1).cuda()
                 label_downsampled = F.grid_sample(label, grid)
-
-                pe = ((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1, dim = 1, keepdim = True)
+                #label_downsampled.requires_grad = True
+                pe = torch.abs((f_img - f_out)).mean(dim = 1, keepdim = True)
+                #pe = ((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1, dim = 1, keepdim = True)
                 pe = pe * label_downsampled
                 perceptual[0][i] = torch.mean(torch.mean(pe, dim = 2), dim = 2)
-
                 i += 1
-                #perceptual.append(((f_img - f_out) / self.perceptual_dict[name]).norm(p = 1)# )
-            f_out.detach_()
 
-        loss = torch.tensor(0, dtype = torch.float).cuda()
-        '''
-        for pe in perceptual:
-            loss += pe
-        '''
-        perceptual = perceptual.sum(dim = 1)
+                #print(f_out.requires_grad)
+                f_out.detach_
+                f_img.detach_
+                del pe
+                del grid
+                if i >= 6:
+                    break
+            #else:
+                #f_out.detach_()
+                #f_img.detach_()
 
-        loss = torch.sum(perceptual.min(dim = 1)[0]) * 0.999 + torch.sum(perceptual.mean(dim = 1)) * 0.001
+        pe = perceptual.sum(dim = 1)
 
-        #print(loss.size())
-        return loss.unsqueeze(0)#torch.tensor(perceptual, dtype = torch.float)
+        loss = torch.sum(pe.min(dim = 1)[0]) * 0.999 + torch.sum(pe.mean(dim = 1)) * 0.001
+        #loss = torch.sum(perceptual.min(dim=1)[0]) * 0.999 + torch.sum(perceptual.mean(dim=1)) * 0.001
+
+        #loss = torch.sum(perceptual)
+        #print(perceptual.size())
+
+        del f_img
+        del f_out
+        del pe
+        perceptual.detach_()
+        return loss.unsqueeze(0), perceptual#torch.tensor(perceptual, dtype = torch.float)
 
         '''
         perceptual = []
@@ -286,7 +307,7 @@ def vgg19(pretrained=False, **kwargs):
         kwargs['init_weights'] = False
     model = VGG(make_layers(cfg['E']), **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['vgg19']))
+        model.load_state_dict(model_zoo.load_url(model_urls['vgg19']), strict = False)
     return model
 
 

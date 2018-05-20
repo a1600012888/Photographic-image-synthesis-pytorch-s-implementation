@@ -78,6 +78,18 @@ class TorchDataset(Dataset):
         sample['data'] = torch.tensor(sample['data'], dtype = torch.float)
         sample['label'] = torch.tensor(sample['label'], dtype = torch.float)
 
+        x_grid = torch.linspace(-1, 1, 2 * self.super_resolution).repeat(self.super_resolution, 1)
+        y_grid = torch.linspace(-1, 1, self.super_resolution).view(-1, 1).repeat(
+            1, self.super_resolution * 2)
+        grid = torch.cat((x_grid.unsqueeze(2), y_grid.unsqueeze(2)), 2)
+        #print(grid.size())
+        grid = grid.unsqueeze_(0)
+        grid = grid.repeat(1, 1, 1, 1)
+        #print(grid.size())
+        # print('Label size {}'.format(label.size()))
+        sample['label'] = F.grid_sample(sample['label'].unsqueeze(dim = 0), grid).squeeze(dim = 0)
+        #print(sample['label'].size())
+
         return sample
 
     def test_ids(self):
@@ -104,7 +116,7 @@ class TorchDataset(Dataset):
         label = get_semantic_map(self.id2label[id])
         # label of shape [x, y, 19]
         label = np.asarray(label).squeeze(axis=0)#.transpose((2, 0, 1))
-
+        label = np.concatenate((label, 1 - np.sum(label, -1, keepdims=True)), -1)
         img = np.array(io.imread(self.id2img[id]))
 
         return label, img
