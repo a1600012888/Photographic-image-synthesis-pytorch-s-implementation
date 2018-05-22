@@ -13,13 +13,16 @@ from tqdm import tqdm
 #from tensorboardX import SummaryWriter
 from my_snip.tensorboard import TensorBoard as SummaryWriter   #Using my wrapper funciton
 import argparse
-
+from my_snip.config import save_args
 parser = argparse.ArgumentParser()
 parser.add_argument('prefix', type = str)
 parser.add_argument('--resume',default = None, type = str, help = 'the model to load')
 parser.add_argument('--record_step', default=200, type = int, help = 'record loss, etc per ?')
 parser.add_argument('--start_epoch', default = 0, type = int, help = 'start to train in epoch?')
+parser.add_argument('--groups', default = 6, type = int, help = 'How many images to synthesis at onece')
+parser.add_argument('--weight_decay', default = 0, type = float, help = 'Weight decay')
 args = parser.parse_args()
+
 record_step = args.record_step
 epoch_num = 200
 learning_rate_policy = [[30, 1e-2],
@@ -56,7 +59,7 @@ print('Dataloader ready!')
 base_dir = os.path.join('./data', args.prefix)
 if not os.path.exists(base_dir):
     os.mkdir(base_dir)
-
+save_args(args, base_dir)
 log_dir = os.path.join('./logs', args.prefix)
 writer = SummaryWriter(log_dir)
 
@@ -64,7 +67,7 @@ make_checkpoint = TorchCheckpoint(base_dir, high = False)
 
 
 
-net = CRN(256)
+net = CRN(256, args.groups)
 
 if args.resume != None:
     assert os.path.exists(args.resume), 'model does not exist!'
@@ -75,8 +78,8 @@ net.cuda()
 ## init ??
 
 
-optimizer = torch.optim.SGD(net.parameters(), lr = 0.001, momentum=0.9, weight_decay=0)
-#optimizer = torch.optim.Adam(net.parameters(), lr = 0.001)
+optimizer = torch.optim.SGD(net.parameters(), lr = 0.001, momentum=0.9, weight_decay=args.weight_decay)
+#optimizer = torch.optim.Adam(net.parameters(), lr = 0.001, weight_decay=args.weight_decay)
 vgg_perceptual_loss = vgg19(pretrained = True)
 
 vgg_perceptual_loss.cuda()
@@ -97,6 +100,7 @@ batch_time_m = AvgMeter('train time')
 
 for e_ in range(epoch_num):
 
+   # torch.cuda.empty_cache()
     net.train()
     epoch_loss.reset()
     p0_loss.reset()
@@ -175,13 +179,15 @@ for e_ in range(epoch_num):
         if clock.minibatch % record_step == 0:
             writer.add_scalar('Train/loss', loss.item(), clock.step // record_step)
             writer.add_image('Train/Raw_img', [img.cpu().numpy()[0]], clock.step // record_step)
-            writer.add_image('Train/output', [out.cpu().numpy()[0]], clock.step // record_step)
+            for ij in range(args.groups):
+                writer.add_image('Train/output' + str(ij), [out.cpu().numpy()[ij]], clock.step // record_step)
         if clock.minibatch % 200 == 0:
 
             print('epoch-{}, step-{}'.format(clock.epoch, clock.minibatch))
 
             print('Loss: {}'.format(epoch_loss.mean))
-
+            print('L0-L5: {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f}', p0_loss.mean, p1_loss.mean, p2_loss.mean, p3_loss.mean, p4_loss.mean, p5_loss.mean)
+            print('Learning_rate: {}'.format(get_learing_rate(clock.epoch)))
             print('Time usage: data time-{:.3f}, batch time-{:.3f}'.format(data_time_m.mean, batch_time_m.mean))
 
             print('This epoch has lasted {:.3f} mins, expect {:.3f} mins to run'.format((start_time - epoch_time)/60,
@@ -224,36 +230,37 @@ for e_ in range(epoch_num):
         loss, perceptual = vgg_perceptual_loss(out, img, inp)
         #loss = vgg_perceptual_loss(out, img, inp)
         loss = loss.mean()
-        epoch_loss.update(loss.item())
+        epoch_loss.update(float(loss.item()))
 
         #print(perceptual.size())
         perceptual = perceptual.mean(dim = 0)
         perceptual = perceptual.mean(dim = -1)
         perceptual = perceptual.mean(dim=1)  #
-        p0_loss.update(perceptual[0].item())
-        p1_loss.update(perceptual[1].item())
-        p2_loss.update(perceptual[2].item())
-        p3_loss.update(perceptual[3].item())
-        p4_loss.update(perceptual[4].item())
-        p5_loss.update(perceptual[4].item())
-
+        p0_loss.update(float(perceptual[0].item()))
+        p1_loss.update(float(perceptual[1].item()))
+        p2_loss.update(float(perceptual[2].item()))
+        p3_loss.update(float(perceptual[3].item()))
+        p4_loss.update(float(perceptual[4].item()))
+        p5_loss.update(float(perceptual[5].item()))
         loss.detach_()
         img.detach_()
         out.detach_()
         inp.detach_()
         if i % 50 == 0:
             writer.add_image('Val/Raw_img', [img.cpu().numpy()[0]], clock.epoch * 11 + i)
-            writer.add_image('Val/output', [out.cpu().numpy()[0]], clock.epoch * 11 + i)
-
+            for ij in range(args.groups):
+                writer.add_image('Val/output' + str(ij), [out.cpu().numpy()[ij]], clock.epoch * 11 + i)
     writer.add_scalar('Val/Epoch_loss', epoch_loss.mean, clock.epoch)
 
     print('Validation finished.   Lasting {:.2f} mins'.format((time.time() - val_time) / 60))
     print('Validation loss: {:.3f}'.format(epoch_loss.mean))
+    print('L0-L5: {:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f}', p0_loss.mean, p1_loss.mean, p2_loss.mean, p3_loss.mean, p4_loss.mean, p5_loss.mean)
     writer.add_scalar('Val/Epoch_loss_p0', p0_loss.mean, clock.epoch)
     writer.add_scalar('Val/Epoch_loss_p1', p1_loss.mean, clock.epoch)
     writer.add_scalar('Val/Epoch_loss_p2', p2_loss.mean, clock.epoch)
     writer.add_scalar('Val/Epoch_loss_p3', p3_loss.mean, clock.epoch)
     writer.add_scalar('Val/Epoch_loss_p4', p4_loss.mean, clock.epoch)
     writer.add_scalar('Val/Epoch_loss_p5', p5_loss.mean, clock.epoch)
+    torch.cuda.empty_cache()
 writer.close()
 print('Training Finished!')
